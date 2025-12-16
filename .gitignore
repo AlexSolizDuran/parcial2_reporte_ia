@@ -1,0 +1,19 @@
+# Ignorar archivos de entorno virtual
+venv/
+.venv/
+env/
+
+# Ignorar archivos compilados de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- SEGURIDAD: IMPORTANTE ---
+# Ignorar variables de entorno con claves secretas
+.env
+
+# Ignorar archivos de sistema y configuración de IDE
+.DS_Store
+.vscode/
+.idea/
