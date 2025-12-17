@@ -2,15 +2,15 @@ import os
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Any, Optional
 import google.generativeai as genai
 from dotenv import load_dotenv
+import re
 
 # Cargar variables de entorno
 load_dotenv()
 
 # Configurar API Key
-GEMINI_API_KEY = "AIzaSyDWbJYaaSmC2DgbJW6CYKg-TmNsG5lkHyQ"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     print("⚠️  ADVERTENCIA: Falta GEMINI_API_KEY en .env")
 
@@ -19,76 +19,85 @@ model = genai.GenerativeModel('gemini-1.5-flash')
 
 app = FastAPI()
 
-# --- MODELOS DE DATOS (IGUAL QUE EN JAVA) ---
+# --- 1. MODELOS ADAPTADOS AL JAVA EXISTENTE ---
+
+# Java envía: {"prompt":String}
 class IaRequestDTO(BaseModel):
-    tipoReporte: str
-    datos: Any
-    instrucciones: Optional[str] = None
+    prompt: str 
 
+# Java espera: un objeto con métodos .sql() y .formato()
+# Por tanto, el JSON debe tener claves "sql" y "formato"
 class IaResponseDTO(BaseModel):
-    analisis: str
-    recomendaciones: Optional[str] = ""
+    sql: str
+    formato: str
 
-# --- CONTEXTO DE LA BASE DE DATOS (EL SCRIPT RESUMIDO) ---
+# --- 2. CONTEXTO DE BD (Igual que antes) ---
 DB_SCHEMA = """
-Estás actuando como un generador de SQL experto para una base de datos MySQL de una tienda de ropa (Trendora).
-Tu única tarea es convertir la petición del usuario en una consulta SQL válida.
+Eres un experto SQL para MySQL. Tu tarea es generar una consulta SQL basada en la petición.
+NO expliques nada. Solo devuelve el SQL.
 
-ESQUEMA DE LA BASE DE DATOS (Tablas y Columnas Clave):
-
+TABLAS:
 1. usuarios (id, nombre, email, rol_id)
-   - Roles: 1=ADMIN, 2=CLIENTE, 3=VENDEDOR
-2. roles (id, nombre)
-3. productos (id, nombre, descripcion, precio, categoria_id, marca_id, modelo_id, material_id)
-4. prod_variantes (id, producto_id, sku, precio, stock, color_id, talla_id)
-   - Esta tabla tiene el stock real. Un producto padre tiene muchas variantes.
-5. categorias (id, nombre)
-6. marcas (id, nombre)
-7. colores (id, nombre, codigo_hex)
-8. tallas (id, nombre)
-9. ventas (id, fecha_venta, monto_total, usuario_id, estado_pedido)
-10. detalle_ventas (id, venta_id, prod_variante_id, cantidad, precio_unitario, subtotal)
-
-RELACIONES IMPORTANTES:
-- Una venta tiene muchos detalles.
-- Un detalle de venta apunta a una 'prod_variante', NO directamente a 'productos'.
-- Para saber el nombre del producto vendido: detalle_ventas -> prod_variantes -> productos -> nombre.
-- Para saber el color vendido: detalle_ventas -> prod_variantes -> colores.
+2. productos (id, nombre, descripcion, precio, categoria_id, marca_id)
+3. prod_variantes (id, producto_id, sku, stock, talla_id, color_id)
+4. categorias (id, nombre)
+5. marcas (id, nombre)
+6. colores (id, nombre)
+7. tallas (id, nombre)
+8. ventas (id, fecha_venta, monto_total, usuario_id)
+9. detalle_ventas (id, venta_id, prod_variante_id, cantidad, precio_unitario, subtotal)
 
 REGLAS:
-1. Genera SOLO el código SQL. No uses bloques de código markdown (```sql). Solo texto plano.
-2. Si la petición es ambigua, asume las columnas más lógicas (ej. 'ventas por mes' usa fecha_venta).
-3. Usa JOINs explícitos.
-4. No pongas explicaciones antes ni después del SQL.
+- Devuelve SOLO el código SQL limpio.
+- Si piden "formato excel" o "pdf", ignóralo en el SQL, solo genera la consulta de datos.
 """
 
-@app.post("/generar-sql") 
+@app.post("/generar-sql", response_model=IaResponseDTO) 
 async def generar_sql(request: IaRequestDTO):
     try:
-        # Usamos 'instrucciones' como la query del usuario, o 'tipoReporte' si instrucciones está vacío
-        user_query = request.instrucciones if request.instrucciones else request.tipoReporte
+        print(f"📩 Recibido de Java: {request.prompt}")
         
-        print(f"recibiendo petición SQL para: {user_query}")
+        # 1. Limpiar el prompt que viene de Java ("generar JSON: dame ventas...")
+        raw_prompt = request.prompt
+        user_query = raw_prompt.replace("generar JSON:", "").strip()
 
-        prompt = f"""
+        # 2. Determinar el formato solicitado (PDF, EXCEL o JSON)
+        # Java usa este campo para elegir qué generador usar
+        formato_salida = "json" # Default
+        if "pdf" in user_query.lower():
+            formato_salida = "pdf"
+        elif "excel" in user_query.lower():
+            formato_salida = "excel"
+
+        # 3. Preguntar a Gemini el SQL
+        gemini_prompt = f"""
         {DB_SCHEMA}
         
-        PETICIÓN DEL USUARIO: "{user_query}"
+        PETICIÓN: "{user_query}"
         
         SQL:
         """
-
-        response = model.generate_content(prompt)
-        sql_query = response.text.replace("```sql", "").replace("```", "").strip()
-
+        response = model.generate_content(gemini_prompt)
+        
+        # Limpieza agresiva del SQL (quitar ```sql y saltos de línea extra)
+        sql_limpio = response.text.replace("```sql", "").replace("```", "").strip()
+        
+        # 4. Responder exactamente lo que Java espera
         return IaResponseDTO(
-            analisis=sql_query,  # Aquí devolvemos el SQL generado
-            recomendaciones="Consulta generada por IA basada en el esquema de Trendora."
+            sql=sql_limpio,
+            formato=formato_salida
         )
 
     except Exception as e:
-        print(f"Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"❌ Error: {e}")
+        # En caso de error, devolvemos un SQL dummy para que Java no explote
+        # O podrías lanzar HTTPException, pero Java espera JSON
+        return IaResponseDTO(
+            sql="SELECT 1", 
+            formato="json"
+        )
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    # Puerto dinámico para Render o 8001 local
+    port = int(os.environ.get("PORT", 8001))
+    uvicorn.run(app, host="0.0.0.0", port=port)
