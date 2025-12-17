@@ -28,45 +28,48 @@ class IaResponseDTO(BaseModel):
 DB_SCHEMA = """
 Actúa como un experto DBA de MySQL. Genera una consulta SQL exacta y eficiente.
 
-### MAPA DE LA BASE DE DATOS (Trendora)
+### MAPA DE LA BASE DE DATOS (Trendora - Estructura Real)
 
-1. TABLAS PRINCIPALES (Nombres en singular, claves primarias 'id'):
-   - usuario (id, nombre, apellido, email, rol_id)
-   - rol (id, nombre)  -> [Roles: 'ADMIN', 'CLIENTE', 'VENDEDOR']
-   - producto (id, nombre, descripcion, categoria_id, modelo_id)
-   - prod_variante (id, sku, stock, precio, costo, producto_id, color_id, talla_id)
-     * ESTA ES LA TABLA CLAVE. Une el producto con su inventario.
-   
-2. TABLAS DE ATRIBUTOS:
-   - categoria (id, nombre)
-   - marca (id, nombre)
+1. GESTIÓN DE USUARIOS:
+   - usuario (id, username, nombre, apellido, email, rol_id)
+   - rol (id, nombre) -> [Ej: 'ROLE_ADMIN', 'ROLE_VENDEDOR', 'ROLE_CLIENTE']
+
+2. DEFINICIÓN DE PRODUCTOS (Atención a la estructura):
+   - producto (id, descripcion, categoria_id, modelo_id, material_id)
+     * NOTA: Esta tabla NO tiene nombre. Solo descripción.
    - modelo (id, nombre, marca_id)
+     * AQUÍ está el nombre principal del producto (Ej: "Air Max", "Ultra Boost").
+   - marca (id, nombre) -> (Ej: "Nike", "Adidas")
+   - categoria (id, nombre, padre_id) -> (padre_id es para subcategorías)
+   - material (id, nombre)
+
+3. INVENTARIO Y PRECIOS (Tabla: prod_variante):
+   - prod_variante (id, sku, stock, precio, costo, producto_id, color_id, talla_id)
+     * ESTA ES LA TABLA PRINCIPAL PARA VENTAS.
+     * Contiene el precio y el stock real.
    - color (id, nombre)
    - talla (id, nombre)
 
-3. TABLAS DE VENTAS:
-   - venta (id, fecha_venta, monto_total, estado_pedido, cliente_id, vendedor_id)
-     * Nota: 'cliente_id' y 'vendedor_id' son FKs hacia la tabla 'usuario'.
+4. VENTAS:
+   - venta (id, numero_venta, fecha_venta, monto_total, estado_pedido, cliente_id, vendedor_id)
    - detalle_venta (id, venta_id, prod_variante_id, cantidad, precio_unitario, subtotal)
 
-VALORES DE EJEMPLO (Para guiar tus filtros):
-- Categorías: 'Hombre', 'Mujer', 'Niño', 'Calzado'.
-- Marcas: 'Nike', 'Adidas', 'Puma'.
-- Colores: 'Rojo', 'Azul', 'Negro'.
+### REGLAS DE NEGOCIO OBLIGATORIAS PARA SQL:
 
-### REGLAS DE NEGOCIO PARA SQL:
-1. CAMINO DE VENTAS A PRODUCTOS:
-   detalle_venta -> prod_variante -> producto
-   (Nunca unas detalle_venta directo con producto).
+1. CÓMO OBTENER EL NOMBRE DEL PRODUCTO:
+   Debes hacer JOIN de `producto` -> `modelo` -> `marca`.
+   Formato de visualización sugerido: CONCAT(ma.nombre, ' ', m.nombre) 
+   (Ej: "Nike Air Max").
 
-2. PARA FILTRAR POR FECHAS:
-   Usa funciones estándar de MySQL: YEAR(v.fecha_venta), MONTH(v.fecha_venta), DATE(v.fecha_venta).
+2. CAMINO DE VENTAS:
+   detalle_venta -> prod_variante -> producto -> modelo.
+   (Nunca intentes unir detalle_venta directo con producto, usa prod_variante).
 
-3. PARA "MÁS VENDIDOS":
-   SUM(d.cantidad) agrupado por p.nombre.
+3. FILTROS DE FECHA:
+   Usa funciones de MySQL: YEAR(fecha_venta), MONTH(fecha_venta), DATE(fecha_venta).
 
-4. FORMATO:
-   Devuelve SOLO el código SQL puro. Sin ```sql, sin explicaciones.
+4. FORMATO DE SALIDA:
+   Devuelve SOLO el código SQL puro. Sin markdown (```sql), sin explicaciones.
 """
 
 # --- Endpoint para listar los modelos disponibles ---
