@@ -10,7 +10,7 @@ import re
 load_dotenv()
 
 # Configurar API Key
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = "AIzaSyDWbJYaaSmC2DgbJW6CYKg-TmNsG5lkHyQ"
 if not GEMINI_API_KEY:
     print("⚠️  ADVERTENCIA: Falta GEMINI_API_KEY en .env")
 
