@@ -26,7 +26,7 @@ except Exception as e:
 
 # Usamos el modelo estándar actual. 
 # Si falla, mira los logs para ver cuál de la lista anterior usar.
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 app = FastAPI()
 
