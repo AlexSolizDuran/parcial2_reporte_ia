@@ -26,61 +26,47 @@ class IaResponseDTO(BaseModel):
 
 # MEJORADO: Esquema de base de datos con ejemplos específicos
 DB_SCHEMA = """
-Actúa como un experto en SQL para PostgreSQL. Genera una consulta SQL limpia basada en la petición.
+Actúa como un experto DBA de MySQL. Genera una consulta SQL exacta y eficiente.
 
-ESQUEMA EXACTO DE LA BASE DE DATOS:
+### MAPA DE LA BASE DE DATOS (Trendora)
 
-1. TABLAS DE USUARIOS Y ROLES:
-   - usuario (id, nombre, apellido, email, username, telefono, rol_id)
-   - rol (id, nombre) -> (Roles típicos: 'ROLE_ADMIN', 'ROLE_CLIENTE', 'ROLE_VENDEDOR')
-   - direccion (id, usuario_id, nombre, direccion, referencia, latitud, longitud)
-
-2. TABLAS DE PRODUCTOS (CATÁLOGO):
-   - producto (id, descripcion, imagen, categoria_id, modelo_id, material_id)
-   - categoria (id, nombre, categoria_padre_id)
-   - modelo (id, nombre, marca_id)
+1. TABLAS PRINCIPALES (Nombres en singular, claves primarias 'id'):
+   - usuario (id, nombre, apellido, email, rol_id)
+   - rol (id, nombre)  -> [Roles: 'ADMIN', 'CLIENTE', 'VENDEDOR']
+   - producto (id, nombre, descripcion, categoria_id, modelo_id)
+   - prod_variante (id, sku, stock, precio, costo, producto_id, color_id, talla_id)
+     * ESTA ES LA TABLA CLAVE. Une el producto con su inventario.
+   
+2. TABLAS DE ATRIBUTOS:
+   - categoria (id, nombre)
    - marca (id, nombre)
-   - material (id, nombre)
-   - etiqueta (id, nombre)
-   - producto_etiqueta (producto_id, etiqueta_id)
-
-3. TABLAS DE INVENTARIO Y VARIANTES:
-   - prod_variante (id, sku, stock, precio, costo, ppp, ppv, id_producto, id_color, id_talla)
-   - color (id, nombre, codigo_hex)
+   - modelo (id, nombre, marca_id)
+   - color (id, nombre)
    - talla (id, nombre)
 
-4. TABLAS DE VENTAS:
-   - venta (id, numero_venta, fecha_venta, monto_total, metodo_pago, tipo_venta, estado_pedido, cliente_id, vendedor_id)
-   - detalle_venta (id, venta_id, prod_variante_id, cantidad, precio_unitario, subtotal, descuento)
+3. TABLAS DE VENTAS:
+   - venta (id, fecha_venta, monto_total, estado_pedido, cliente_id, vendedor_id)
+     * Nota: 'cliente_id' y 'vendedor_id' son FKs hacia la tabla 'usuario'.
+   - detalle_venta (id, venta_id, prod_variante_id, cantidad, precio_unitario, subtotal)
 
-EJEMPLOS DE CONSULTAS:
+VALORES DE EJEMPLO (Para guiar tus filtros):
+- Categorías: 'Hombre', 'Mujer', 'Niño', 'Calzado'.
+- Marcas: 'Nike', 'Adidas', 'Puma'.
+- Colores: 'Rojo', 'Azul', 'Negro'.
 
-1. Para "lista de clientes":
-   SELECT u.id, u.nombre, u.apellido, u.email, u.telefono, u.username 
-   FROM usuario u 
-   JOIN rol r ON u.rol_id = r.id 
-   WHERE r.nombre = 'ROLE_CLIENTE'
+### REGLAS DE NEGOCIO PARA SQL:
+1. CAMINO DE VENTAS A PRODUCTOS:
+   detalle_venta -> prod_variante -> producto
+   (Nunca unas detalle_venta directo con producto).
 
-2. Para "productos más vendidos":
-   SELECT p.id, p.descripcion, SUM(dv.cantidad) as total_vendido
-   FROM producto p
-   JOIN prod_variante pv ON p.id = pv.id_producto
-   JOIN detalle_venta dv ON pv.id = dv.prod_variante_id
-   GROUP BY p.id, p.descripcion
-   ORDER BY total_vendido DESC
-   LIMIT 10
+2. PARA FILTRAR POR FECHAS:
+   Usa funciones estándar de MySQL: YEAR(v.fecha_venta), MONTH(v.fecha_venta), DATE(v.fecha_venta).
 
-3. Para "ventas por mes":
-   SELECT EXTRACT(MONTH FROM v.fecha_venta) as mes, EXTRACT(YEAR FROM v.fecha_venta) as anio, SUM(v.monto_total) as total_ventas
-   FROM venta v
-   GROUP BY mes, anio
-   ORDER BY anio, mes
+3. PARA "MÁS VENDIDOS":
+   SUM(d.cantidad) agrupado por p.nombre.
 
-REGLAS DE ORO:
-1. Devuelve SOLO el código SQL. Sin markdown (```sql), sin explicaciones.
-2. Usa nombres en SINGULAR para las tablas (venta, usuario, producto), tal como están definidas.
-3. Para joins con la tabla rol, usa 'rol.id' (no 'rol.id_rol').
-4. Si piden "clientes", filtra por rol.nombre = 'ROLE_CLIENTE'.
+4. FORMATO:
+   Devuelve SOLO el código SQL puro. Sin ```sql, sin explicaciones.
 """
 
 # --- Endpoint para listar los modelos disponibles ---
