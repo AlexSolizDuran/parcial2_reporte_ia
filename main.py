@@ -1,36 +1,21 @@
 import os
 import uvicorn
-from fastapi import FastAPI
+import time
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
 load_dotenv()
 
-# Configurar API Key
-GEMINI_API_KEY = "AIzaSyDWbJYaaSmC2DgbJW6CYKg-TmNsG5lkHyQ"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     print("⚠️  ADVERTENCIA: Falta GEMINI_API_KEY en .env")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# --- DIAGNÓSTICO DE MODELOS ---
-print("🔍 Buscando modelos disponibles...")
-try:
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            print(f"   - {m.name}")
-except Exception as e:
-    print(f"⚠️ Error listando modelos: {e}")
-
-# Usamos el modelo estándar actual. 
-# Si falla, mira los logs para ver cuál de la lista anterior usar.
-model = genai.GenerativeModel('gemini-2.0-flash')
-
 app = FastAPI()
 
-# --- MODELOS ---
 class IaRequestDTO(BaseModel):
     prompt: str 
 
@@ -38,7 +23,6 @@ class IaResponseDTO(BaseModel):
     sql: str
     formato: str
 
-# --- CONTEXTO DE BD ---
 DB_SCHEMA = """
 Eres un experto SQL para MySQL. Tu tarea es generar una consulta SQL basada en la petición.
 NO expliques nada. Solo devuelve el SQL.
@@ -59,45 +43,52 @@ REGLAS:
 - Si piden "formato excel" o "pdf", ignóralo en el SQL, solo genera la consulta de datos.
 """
 
+def generar_con_modelo(nombre_modelo, prompt):
+    """Intenta generar contenido con un modelo específico"""
+    print(f"🤖 Probando con modelo: {nombre_modelo}...")
+    model = genai.GenerativeModel(nombre_modelo)
+    return model.generate_content(prompt)
+
 @app.post("/generar-sql", response_model=IaResponseDTO) 
 async def generar_sql(request: IaRequestDTO):
-    try:
-        print(f"📩 Recibido de Java: {request.prompt}")
-        
-        raw_prompt = request.prompt
-        user_query = raw_prompt.replace("generar JSON:", "").strip()
+    # Lista de modelos a probar en orden de prioridad
+    # Si falla el primero, prueba el segundo
+    modelos_a_probar = [
+        'gemini-2.0-flash-lite-preview-02-05', # Opción 1: Lite (rápido y barato)
+        'gemini-2.0-flash-exp',               # Opción 2: Experimental
+        'gemini-2.0-flash'                    # Opción 3: Estándar
+    ]
 
-        formato_salida = "json"
-        if "pdf" in user_query.lower():
-            formato_salida = "pdf"
-        elif "excel" in user_query.lower():
-            formato_salida = "excel"
+    raw_prompt = request.prompt
+    user_query = raw_prompt.replace("generar JSON:", "").strip()
+    
+    formato_salida = "json"
+    if "pdf" in user_query.lower(): formato_salida = "pdf"
+    elif "excel" in user_query.lower(): formato_salida = "excel"
 
-        gemini_prompt = f"""
-        {DB_SCHEMA}
-        
-        PETICIÓN: "{user_query}"
-        
-        SQL:
-        """
-        response = model.generate_content(gemini_prompt)
-        
-        sql_limpio = response.text.replace("```sql", "").replace("```", "").strip()
-        
-        print(f"✅ SQL Generado: {sql_limpio}")
+    gemini_prompt = f"{DB_SCHEMA}\n\nPETICIÓN: \"{user_query}\"\n\nSQL:"
 
-        return IaResponseDTO(
-            sql=sql_limpio,
-            formato=formato_salida
-        )
+    last_error = None
 
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        # Retorno de emergencia para no romper Java
-        return IaResponseDTO(
-            sql="SELECT * FROM productos LIMIT 10", 
-            formato="json"
-        )
+    for modelo in modelos_a_probar:
+        try:
+            response = generar_con_modelo(modelo, gemini_prompt)
+            sql_limpio = response.text.replace("```sql", "").replace("```", "").strip()
+            print(f"✅ SQL Generado con {modelo}")
+            
+            return IaResponseDTO(sql=sql_limpio, formato=formato_salida)
+            
+        except Exception as e:
+            print(f"⚠️ Falló {modelo}: {e}")
+            last_error = e
+            time.sleep(1) # Esperar un poco antes de reintentar con el siguiente
+
+    # Si todos fallan
+    print("❌ Todos los modelos fallaron.")
+    return IaResponseDTO(
+        sql="SELECT * FROM productos LIMIT 1", # SQL Dummy de emergencia
+        formato="json"
+    )
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8001))
