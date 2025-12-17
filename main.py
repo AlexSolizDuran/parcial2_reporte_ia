@@ -15,8 +15,7 @@ if not GEMINI_API_KEY:
     print("⚠️  ADVERTENCIA: Falta GEMINI_API_KEY en .env")
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
-
+model = genai.GenerativeModel('gemini-pro')
 app = FastAPI()
 
 # --- 1. MODELOS ADAPTADOS AL JAVA EXISTENTE ---
