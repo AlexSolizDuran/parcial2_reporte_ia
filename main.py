@@ -1,7 +1,8 @@
 import os
 import uvicorn
 import time
-from fastapi import FastAPI, HTTPException
+import random
+from fastapi import FastAPI
 from pydantic import BaseModel
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -10,7 +11,7 @@ load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    print("⚠️  ADVERTENCIA: Falta GEMINI_API_KEY en .env")
+    print("⚠️  ADVERTENCIA: Falta GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -24,39 +25,24 @@ class IaResponseDTO(BaseModel):
     formato: str
 
 DB_SCHEMA = """
-Eres un experto SQL para MySQL. Tu tarea es generar una consulta SQL basada en la petición.
-NO expliques nada. Solo devuelve el SQL.
-
-TABLAS:
-1. usuarios (id, nombre, email, rol_id)
-2. productos (id, nombre, descripcion, precio, categoria_id, marca_id)
-3. prod_variantes (id, producto_id, sku, stock, talla_id, color_id)
-4. categorias (id, nombre)
-5. marcas (id, nombre)
-6. colores (id, nombre)
-7. tallas (id, nombre)
-8. ventas (id, fecha_venta, monto_total, usuario_id)
-9. detalle_ventas (id, venta_id, prod_variante_id, cantidad, precio_unitario, subtotal)
-
-REGLAS:
-- Devuelve SOLO el código SQL limpio.
-- Si piden "formato excel" o "pdf", ignóralo en el SQL, solo genera la consulta de datos.
+Eres un experto SQL para MySQL. Genera la consulta SQL basada en la petición.
+Tablas: usuarios, roles, productos, prod_variantes, categorias, marcas, colores, tallas, ventas, detalle_ventas.
+REGLA: Devuelve SOLO el SQL limpio. Sin markdown.
 """
 
 def generar_con_modelo(nombre_modelo, prompt):
-    """Intenta generar contenido con un modelo específico"""
-    print(f"🤖 Probando con modelo: {nombre_modelo}...")
+    print(f"🤖 Intentando con: {nombre_modelo}...")
     model = genai.GenerativeModel(nombre_modelo)
     return model.generate_content(prompt)
 
 @app.post("/generar-sql", response_model=IaResponseDTO) 
 async def generar_sql(request: IaRequestDTO):
-    # Lista de modelos a probar en orden de prioridad
-    # Si falla el primero, prueba el segundo
+    # NUEVA LISTA: Priorizamos 1.5-flash que es el más estable y con mayor cupo
     modelos_a_probar = [
-        'gemini-2.0-flash-lite-preview-02-05', # Opción 1: Lite (rápido y barato)
-        'gemini-2.0-flash-exp',               # Opción 2: Experimental
-        'gemini-2.0-flash'                    # Opción 3: Estándar
+        'gemini-1.5-flash',                   # El caballo de batalla (Estable)
+        'gemini-1.5-pro',                     # Más potente (Estable)
+        'gemini-2.0-flash-lite-preview-02-05', # Opción rápida (Preview)
+        'gemini-2.0-flash'                    # Última opción (Suele saturarse)
     ]
 
     raw_prompt = request.prompt
@@ -68,25 +54,27 @@ async def generar_sql(request: IaRequestDTO):
 
     gemini_prompt = f"{DB_SCHEMA}\n\nPETICIÓN: \"{user_query}\"\n\nSQL:"
 
-    last_error = None
-
     for modelo in modelos_a_probar:
         try:
             response = generar_con_modelo(modelo, gemini_prompt)
             sql_limpio = response.text.replace("```sql", "").replace("```", "").strip()
-            print(f"✅ SQL Generado con {modelo}")
-            
+            print(f"✅ ÉXITO con {modelo}")
             return IaResponseDTO(sql=sql_limpio, formato=formato_salida)
             
         except Exception as e:
-            print(f"⚠️ Falló {modelo}: {e}")
-            last_error = e
-            time.sleep(1) # Esperar un poco antes de reintentar con el siguiente
+            err_msg = str(e)
+            print(f"⚠️ Falló {modelo}: {err_msg[:100]}...") # Imprimir solo el inicio del error
+            
+            # Si el error es de cuota (429), esperamos un poco más antes de seguir
+            if "429" in err_msg:
+                time.sleep(2) 
+            else:
+                time.sleep(0.5)
 
-    # Si todos fallan
-    print("❌ Todos los modelos fallaron.")
+    # Respuesta de emergencia si todo falla
+    print("❌ CRÍTICO: Ningún modelo respondió.")
     return IaResponseDTO(
-        sql="SELECT * FROM productos LIMIT 1", # SQL Dummy de emergencia
+        sql="SELECT * FROM productos LIMIT 10", 
         formato="json"
     )
 
