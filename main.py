@@ -1,10 +1,9 @@
 import os
 import uvicorn
 import time
-import random
+import google.genai as genai
 from fastapi import FastAPI
 from pydantic import BaseModel
-import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,7 +12,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     print("⚠️  ADVERTENCIA: Falta GEMINI_API_KEY")
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 app = FastAPI()
 
@@ -23,26 +22,148 @@ class IaRequestDTO(BaseModel):
 class IaResponseDTO(BaseModel):
     sql: str
     formato: str
+    columnas: list[str]
 
+# MEJORADO: Esquema de base de datos con ejemplos específicos
 DB_SCHEMA = """
-Eres un experto SQL para MySQL. Genera la consulta SQL basada en la petición.
-Tablas: usuarios, roles, productos, prod_variantes, categorias, marcas, colores, tallas, ventas, detalle_ventas.
-REGLA: Devuelve SOLO el SQL limpio. Sin markdown.
+Actúa como un experto en SQL para PostgreSQL. Genera una consulta SQL limpia basada en la petición.
+
+ESQUEMA EXACTO DE LA BASE DE DATOS:
+
+1. TABLAS DE USUARIOS Y ROLES:
+   - usuario (id, nombre, apellido, email, username, telefono, rol_id)
+   - rol (id, nombre) -> (Roles típicos: 'ROLE_ADMIN', 'ROLE_CLIENTE', 'ROLE_VENDEDOR')
+   - direccion (id, usuario_id, nombre, direccion, referencia, latitud, longitud)
+
+2. TABLAS DE PRODUCTOS (CATÁLOGO):
+   - producto (id, descripcion, imagen, categoria_id, modelo_id, material_id)
+   - categoria (id, nombre, categoria_padre_id)
+   - modelo (id, nombre, marca_id)
+   - marca (id, nombre)
+   - material (id, nombre)
+   - etiqueta (id, nombre)
+   - producto_etiqueta (producto_id, etiqueta_id)
+
+3. TABLAS DE INVENTARIO Y VARIANTES:
+   - prod_variante (id, sku, stock, precio, costo, ppp, ppv, id_producto, id_color, id_talla)
+   - color (id, nombre, codigo_hex)
+   - talla (id, nombre)
+
+4. TABLAS DE VENTAS:
+   - venta (id, numero_venta, fecha_venta, monto_total, metodo_pago, tipo_venta, estado_pedido, cliente_id, vendedor_id)
+   - detalle_venta (id, venta_id, prod_variante_id, cantidad, precio_unitario, subtotal, descuento)
+
+EJEMPLOS DE CONSULTAS:
+
+1. Para "lista de clientes":
+   SELECT u.id, u.nombre, u.apellido, u.email, u.telefono, u.username 
+   FROM usuario u 
+   JOIN rol r ON u.rol_id = r.id 
+   WHERE r.nombre = 'ROLE_CLIENTE'
+
+2. Para "productos más vendidos":
+   SELECT p.id, p.descripcion, SUM(dv.cantidad) as total_vendido
+   FROM producto p
+   JOIN prod_variante pv ON p.id = pv.id_producto
+   JOIN detalle_venta dv ON pv.id = dv.prod_variante_id
+   GROUP BY p.id, p.descripcion
+   ORDER BY total_vendido DESC
+   LIMIT 10
+
+3. Para "ventas por mes":
+   SELECT EXTRACT(MONTH FROM v.fecha_venta) as mes, EXTRACT(YEAR FROM v.fecha_venta) as anio, SUM(v.monto_total) as total_ventas
+   FROM venta v
+   GROUP BY mes, anio
+   ORDER BY anio, mes
+
+REGLAS DE ORO:
+1. Devuelve SOLO el código SQL. Sin markdown (```sql), sin explicaciones.
+2. Usa nombres en SINGULAR para las tablas (venta, usuario, producto), tal como están definidas.
+3. Para joins con la tabla rol, usa 'rol.id' (no 'rol.id_rol').
+4. Si piden "clientes", filtra por rol.nombre = 'ROLE_CLIENTE'.
 """
+
+# --- Endpoint para listar los modelos disponibles ---
+@app.get("/listar-modelos")
+async def listar_modelos_disponibles():
+    """
+    Endpoint para obtener la lista de modelos disponibles.
+    """
+    print("\n🔍 Obteniendo la lista de modelos disponibles...")
+    try:
+        models_response = client.models.list()
+        modelos_disponibles = [model.name for model in models_response if 'gemini' in model.name.lower()]
+        return {"modelos": modelos_disponibles}
+    except Exception as e:
+        print(f"❌ ERROR al listar modelos: {str(e)}")
+        return {"error": str(e), "modelos": []}
+
+# --- Endpoint de depuración para ver qué SQL se está generando ---
+@app.post("/debug-sql")
+async def debug_sql(request: IaRequestDTO):
+    """
+    Endpoint para depurar la generación de SQL.
+    """
+    raw_prompt = request.prompt
+    user_query = raw_prompt.replace("generar JSON:", "").strip()
+    
+    gemini_prompt = f"{DB_SCHEMA}\n\nPETICIÓN: \"{user_query}\"\n\nSQL:"
+    
+    modelos_a_probar = [
+        'models/gemini-2.5-flash',
+        'models/gemini-2.5-pro',
+    ]
+    
+    for modelo in modelos_a_probar:
+        try:
+            response = client.models.generate_content(
+                model=modelo,
+                contents=gemini_prompt
+            )
+            sql_generado = response.text.strip()
+            
+            # Limpiamos el SQL por si acaso viene con marcadores de código
+            if sql_generado.startswith("```sql"):
+                sql_generado = sql_generado[6:]
+            if sql_generado.endswith("```"):
+                sql_generado = sql_generado[:-3]
+            sql_generado = sql_generado.strip()
+            
+            return {
+                "modelo_usado": modelo,
+                "prompt_original": user_query,
+                "prompt_completo": gemini_prompt,
+                "sql_generado": sql_generado
+            }
+        except Exception as e:
+            print(f"Error con {modelo}: {str(e)}")
+            continue
+    
+    return {"error": "No se pudo generar SQL con ningún modelo"}
+
+# -----------------------------------------------------------------------
 
 def generar_con_modelo(nombre_modelo, prompt):
     print(f"🤖 Intentando con: {nombre_modelo}...")
-    model = genai.GenerativeModel(nombre_modelo)
-    return model.generate_content(prompt)
+    try:
+        response = client.models.generate_content(
+            model=nombre_modelo,
+            contents=prompt
+        )
+        return response
+    except Exception as e:
+        print(f"Error al generar contenido con {nombre_modelo}: {str(e)}")
+        raise
 
 @app.post("/generar-sql", response_model=IaResponseDTO) 
 async def generar_sql(request: IaRequestDTO):
-    # NUEVA LISTA: Priorizamos 1.5-flash que es el más estable y con mayor cupo
+    # LISTA ACTUALIZADA con los nombres CORRECTOS de tu API.
     modelos_a_probar = [
-        'gemini-1.5-flash',                   # El caballo de batalla (Estable)
-        'gemini-1.5-pro',                     # Más potente (Estable)
-        'gemini-2.0-flash-lite-preview-02-05', # Opción rápida (Preview)
-        'gemini-2.0-flash'                    # Última opción (Suele saturarse)
+        'models/gemini-2.5-flash',      # Última generación, rápido y potente
+        'models/gemini-2.5-pro',        # Última generación, el más capaz
+        'models/gemini-flash-latest',    # Modelo flash estable y confiable
+        'models/gemini-pro-latest',     # Modelo pro estable y confiable
+        'models/gemini-2.0-flash',      # Versión anterior de flash, muy rápida
     ]
 
     raw_prompt = request.prompt
@@ -52,30 +173,51 @@ async def generar_sql(request: IaRequestDTO):
     if "pdf" in user_query.lower(): formato_salida = "pdf"
     elif "excel" in user_query.lower(): formato_salida = "excel"
 
+    # MODIFICADO: Usamos el esquema de base de datos mejorado
     gemini_prompt = f"{DB_SCHEMA}\n\nPETICIÓN: \"{user_query}\"\n\nSQL:"
 
     for modelo in modelos_a_probar:
         try:
             response = generar_con_modelo(modelo, gemini_prompt)
-            sql_limpio = response.text.replace("```sql", "").replace("```", "").strip()
+            sql_limpio = response.text.strip()
+            
+            # Limpiamos el SQL por si acaso viene con marcadores de código
+            if sql_limpio.startswith("```sql"):
+                sql_limpio = sql_limpio[6:]
+            if sql_limpio.endswith("```"):
+                sql_limpio = sql_limpio[:-3]
+            sql_limpio = sql_limpio.strip()
+
             print(f"✅ ÉXITO con {modelo}")
-            return IaResponseDTO(sql=sql_limpio, formato=formato_salida)
+            print(sql_limpio,formato_salida)
+            
+            return IaResponseDTO(sql=sql_limpio, formato=formato_salida, columnas=[])
             
         except Exception as e:
             err_msg = str(e)
-            print(f"⚠️ Falló {modelo}: {err_msg[:100]}...") # Imprimir solo el inicio del error
+            print(f"⚠️ Falló {modelo}: {err_msg[:100]}...")
             
-            # Si el error es de cuota (429), esperamos un poco más antes de seguir
-            if "429" in err_msg:
-                time.sleep(2) 
+            # Si el error es de cuota (429), esperamos más tiempo
+            if "429" in err_msg or "quota" in err_msg.lower() or "Resource has been exhausted" in err_msg:
+                wait_time = 5
+                print(f"Esperando {wait_time} segundos debido a límite de cuota...")
+                time.sleep(wait_time)
             else:
-                time.sleep(0.5)
+                time.sleep(1)
 
-    # Respuesta de emergencia si todo falla
     print("❌ CRÍTICO: Ningún modelo respondió.")
+    if "cliente" in user_query.lower():
+            fallback_sql = "SELECT u.id, u.nombre, u.apellido, u.email FROM usuario u JOIN rol r ON u.rol_id = r.id WHERE r.nombre = 'ROLE_CLIENTE' LIMIT 10"
+    elif "producto" in user_query.lower():
+            fallback_sql = "SELECT p.id, p.descripcion FROM producto p LIMIT 10"
+    elif "venta" in user_query.lower():
+            fallback_sql = "SELECT v.id, v.numero_venta, v.fecha_venta FROM venta v LIMIT 10"
+    else:
+            fallback_sql = "SELECT * FROM usuario LIMIT 10"
     return IaResponseDTO(
-        sql="SELECT * FROM productos LIMIT 10", 
-        formato="json"
+        sql=fallback_sql,
+        formato="json",
+        columnas=[]
     )
 
 if __name__ == "__main__":
